@@ -9,7 +9,7 @@ import threading
 from collections.abc import Iterable
 from typing import Any
 
-from fx_config import DATE_FMT, DB_PATH
+from fx.config import DATE_FMT, DB_PATH
 
 logger = logging.getLogger(__file__)
 

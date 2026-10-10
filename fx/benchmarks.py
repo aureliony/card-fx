@@ -4,9 +4,9 @@ import datetime as dt
 import logging
 from collections.abc import Iterable
 
-from fx_config import DATE_FMT, FRANKFURTER_HEADERS, FRANKFURTER_URL
-from fx_database import RateDatabase, database
-from fx_http import HttpClient, http_client, to_float
+from fx.config import DATE_FMT, FRANKFURTER_HEADERS, FRANKFURTER_URL
+from fx.database import RateDatabase, database
+from fx.http import HttpClient, http_client, to_float
 
 logger = logging.getLogger(__file__)
 

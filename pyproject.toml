@@ -18,14 +18,8 @@ dependencies = [
 card-fx = "main:main"
 
 [tool.setuptools]
-py-modules = [
-    "fx_benchmarks",
-    "fx_config",
-    "fx_database",
-    "fx_http",
-    "fx_networks",
-    "main",
-]
+py-modules = ["main"]
+packages = ["fx"]
 
 [tool.ruff]
 indent-width = 2

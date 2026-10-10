@@ -8,9 +8,9 @@ from typing import Any
 import numpy as np
 from tabulate import tabulate
 
-from fx_benchmarks import benchmark_service
-from fx_config import DEFAULT_CURRENCIES, SUPPORTED_CURRENCIES
-from fx_networks import all_network_providers
+from fx.benchmarks import benchmark_service
+from fx.config import DEFAULT_CURRENCIES, SUPPORTED_CURRENCIES
+from fx.networks import all_network_providers
 
 logger = logging.getLogger(__file__)
 

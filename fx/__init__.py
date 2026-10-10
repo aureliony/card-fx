@@ -1,0 +1,1 @@
+"""FX rate comparison package."""

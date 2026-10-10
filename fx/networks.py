@@ -4,8 +4,8 @@ import datetime as dt
 from abc import abstractmethod
 from typing import Any
 
-from fx_benchmarks import BenchmarkService, benchmark_service
-from fx_config import (
+from fx.benchmarks import BenchmarkService, benchmark_service
+from fx.config import (
   DATE_FMT,
   MASTERCARD_HEADERS,
   MASTERCARD_URL,
@@ -14,8 +14,8 @@ from fx_config import (
   VISA_HEADERS,
   VISA_URL,
 )
-from fx_database import RateDatabase, database
-from fx_http import HttpClient, http_client, to_float
+from fx.database import RateDatabase, database
+from fx.http import HttpClient, http_client, to_float
 
 
 class NetworkProvider:
