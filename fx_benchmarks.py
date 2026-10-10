@@ -12,9 +12,10 @@ logger = logging.getLogger(__file__)
 
 
 class BenchmarkService:
-  """Coordinates Frankfurter benchmarks and Visa fallback benchmarks."""
+  """Coordinates Frankfurter benchmark rates."""
 
   def __init__(self, db: RateDatabase = database, client: HttpClient = http_client) -> None:
+    self.source = "frankfurter"
     self.db = db
     self.client = client
 
@@ -29,11 +30,13 @@ class BenchmarkService:
     if not date_strings:
       return 0
     home_code = home.upper()
-    if not force and self.db.has_benchmark_rates(
-      "frankfurter", dates, home_code, spend_currencies
-    ):
-      logger.info("Benchmark rates for %s (%s to %s) already cached in database. "
-                  "Skipping API prefetch.", home_code, date_strings[0], date_strings[-1])
+    if not force and self.db.has_benchmark_rates(self.source, dates, home_code, spend_currencies):
+      logger.info(
+        "Benchmark rates for %s (%s to %s) already cached in database. " "Skipping API prefetch.",
+        home_code,
+        date_strings[0],
+        date_strings[-1],
+      )
       return 0
     payload = self.client.get(
       f"{FRANKFURTER_URL}/rates",
@@ -58,21 +61,20 @@ class BenchmarkService:
         continue
       if not raw_rate or raw_rate <= 0:
         continue
-      records.append(("frankfurter", item["date"], quote, home_code,
-                      round(1.0 / raw_rate, 6), item))
+      records.append(
+        (self.source, item["date"], quote, home_code, round(1.0 / raw_rate, 6), item)
+      )
     if records:
       self.db.set_benchmarks(records)
       logger.info("Prefetched and cached %d Frankfurter benchmark records.", len(records))
     return len(records)
 
-  def get(
-    self, date: dt.date, home: str, spend: str
-  ) -> tuple[float | None, str | None]:
+  def get(self, date: dt.date, home: str, spend: str) -> tuple[float | None, str | None]:
     date_string = date.strftime(DATE_FMT)
     home_code, spend_code = home.upper(), spend.upper()
-    cached = self.db.get_benchmark("frankfurter", date_string, spend_code, home_code)
+    cached = self.db.get_benchmark(self.source, date_string, spend_code, home_code)
     if cached is not None:
-      return cached, "frankfurter"
+      return cached, self.source
     payload = self.client.get(
       f"{FRANKFURTER_URL}/rate/{spend_code}/{home_code}",
       FRANKFURTER_HEADERS,
@@ -80,21 +82,15 @@ class BenchmarkService:
     )
     rate = to_float(payload.get("rate")) if payload else None
     if rate is not None:
-      self.db.set_benchmark("frankfurter", date_string, spend_code, home_code, rate, payload)
-      logger.info("Using Frankfurter benchmark for %s/%s on %s: %s",
-                  home_code, spend_code, date_string, rate)
-      return rate, "frankfurter"
+      self.db.set_benchmark(self.source, date_string, spend_code, home_code, rate, payload)
+      logger.info(
+        "Using Frankfurter benchmark for %s/%s on %s: %s", home_code, spend_code, date_string, rate
+      )
+      return rate, self.source
 
-    cached = self.db.get_benchmark("visa", date_string, spend_code, home_code)
-    if cached is not None:
-      return cached, "visa"
-    visa_record = self.db.get("visa", date_string, home_code, spend_code)
-    if visa_record and visa_record.get("network_benchmark") is not None:
-      rate = visa_record["network_benchmark"]
-      self.db.set_benchmark("visa", date_string, spend_code, home_code, rate)
-      return rate, "visa"
-    logger.warning("No benchmark rate available for %s/%s on %s",
-                   home_code, spend_code, date_string)
+    logger.warning(
+      "No benchmark rate available for %s/%s on %s", home_code, spend_code, date_string
+    )
     return None, None
 
 

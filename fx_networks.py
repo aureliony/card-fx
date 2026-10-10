@@ -1,6 +1,7 @@
 """Network-specific Visa, Mastercard, and UnionPay rate providers."""
 
 import datetime as dt
+from abc import abstractmethod
 from typing import Any
 
 from fx_benchmarks import BenchmarkService, benchmark_service
@@ -21,7 +22,10 @@ class NetworkProvider:
   """Base class for providers that persist one network's rates."""
 
   def __init__(
-    self, network: str, db: RateDatabase = database, client: HttpClient = http_client,
+    self,
+    network: str,
+    db: RateDatabase = database,
+    client: HttpClient = http_client,
     benchmarks: BenchmarkService = benchmark_service,
   ) -> None:
     self.network = network
@@ -35,22 +39,30 @@ class NetworkProvider:
     for date_string, record in cached_rows.items():
       if record.get("rate"):
         results[date_string] = {
-          "rate": record["rate"], "bill": round(record["rate"] * amount, 4),
+          "rate": record["rate"],
+          "bill": round(record["rate"] * amount, 4),
           "cached": True,
         }
         if record.get("network_benchmark") is not None:
           results[date_string]["network_benchmark"] = record["network_benchmark"]
     return results
 
+  @abstractmethod
   def lookup(
-    self, date: dt.date, home: str, spend: str,
+    self,
+    date: dt.date,
+    home: str,
+    spend: str,
     amount: float,
   ) -> dict[str, Any] | None:
     raise NotImplementedError
 
   def lookup_many(
-    self, dates: list[dt.date], home: str,
-    spend: str, amount: float = 100_000,
+    self,
+    dates: list[dt.date],
+    home: str,
+    spend: str,
+    amount: float,
   ) -> list[dict[str, Any] | None]:
     self.benchmarks.prefetch(dates, home, [spend])
     cached = self._cached_range(dates, home, spend, amount)
@@ -62,7 +74,9 @@ class NetworkProvider:
 
 class VisaProvider(NetworkProvider):
   def __init__(
-    self, db: RateDatabase = database, client: HttpClient = http_client,
+    self,
+    db: RateDatabase = database,
+    client: HttpClient = http_client,
     benchmarks: BenchmarkService = benchmark_service,
   ) -> None:
     super().__init__("visa", db, client, benchmarks)
@@ -70,10 +84,19 @@ class VisaProvider(NetworkProvider):
   def lookup(self, date, home, spend, amount):
     date_string = date.strftime(DATE_FMT)
     formatted_date = date.strftime("%m/%d/%Y")
-    payload = self.client.get(VISA_URL, VISA_HEADERS, {
-      "amount": str(amount), "fee": "0", "utcConvertedDate": formatted_date,
-      "exchangedate": formatted_date, "fromCurr": home, "toCurr": spend, "isISOCurr": "true",
-    })
+    payload = self.client.get(
+      VISA_URL,
+      VISA_HEADERS,
+      {
+        "amount": str(amount),
+        "fee": "0",
+        "utcConvertedDate": formatted_date,
+        "exchangedate": formatted_date,
+        "fromCurr": home,
+        "toCurr": spend,
+        "isISOCurr": "true",
+      },
+    )
     if not payload or payload.get("status") != "success":
       return None
     values = payload["originalValues"]
@@ -82,8 +105,9 @@ class VisaProvider(NetworkProvider):
     bill = to_float(values.get("toAmountWithVisaRate"))
     network_benchmark = to_float(benchmark.get("benchmarkFxRate"))
     if rate:
-      self.db.set("visa", date_string, home, spend,
-                  {"rate": rate, "network_benchmark": network_benchmark})
+      self.db.set(
+        "visa", date_string, home, spend, {"rate": rate, "network_benchmark": network_benchmark}
+      )
       if network_benchmark is not None:
         self.db.set_benchmark("visa", date_string, spend, home, network_benchmark)
     return {"rate": rate, "bill": bill, "network_benchmark": network_benchmark}
@@ -91,18 +115,26 @@ class VisaProvider(NetworkProvider):
 
 class MastercardProvider(NetworkProvider):
   def __init__(
-    self, db: RateDatabase = database, client: HttpClient = http_client,
+    self,
+    db: RateDatabase = database,
+    client: HttpClient = http_client,
     benchmarks: BenchmarkService = benchmark_service,
   ) -> None:
     super().__init__("mastercard", db, client, benchmarks)
 
   def lookup(self, date, home, spend, amount):
     date_string = date.strftime(DATE_FMT)
-    payload = self.client.get(MASTERCARD_URL, MASTERCARD_HEADERS, {
-      "exchange_date": date_string, "transaction_currency": spend,
-      "cardholder_billing_currency": home, "bank_fee": "0",
-      "transaction_amount": str(amount),
-    })
+    payload = self.client.get(
+      MASTERCARD_URL,
+      MASTERCARD_HEADERS,
+      {
+        "exchange_date": date_string,
+        "transaction_currency": spend,
+        "cardholder_billing_currency": home,
+        "bank_fee": "0",
+        "transaction_amount": str(amount),
+      },
+    )
     if not payload or "data" not in payload or payload["data"].get("errorCode"):
       return None
     values = payload["data"]
@@ -114,7 +146,9 @@ class MastercardProvider(NetworkProvider):
 
 class UnionPayProvider(NetworkProvider):
   def __init__(
-    self, db: RateDatabase = database, client: HttpClient = http_client,
+    self,
+    db: RateDatabase = database,
+    client: HttpClient = http_client,
     benchmarks: BenchmarkService = benchmark_service,
   ) -> None:
     super().__init__("unionpay", db, client, benchmarks)
@@ -132,9 +166,12 @@ class UnionPayProvider(NetworkProvider):
     if not payload or "exchangeRateJson" not in payload:
       return None
     rate = next(
-      (to_float(item.get("rateData")) for item in payload["exchangeRateJson"]
-       if item.get("baseCur", "").upper() == home.upper()
-       and item.get("transCur", "").upper() == spend.upper()),
+      (
+        to_float(item.get("rateData"))
+        for item in payload["exchangeRateJson"]
+        if item.get("baseCur", "").upper() == home.upper()
+        and item.get("transCur", "").upper() == spend.upper()
+      ),
       None,
     )
     if rate is None:

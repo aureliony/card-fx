@@ -52,8 +52,7 @@ class RateDatabase:
           """
         )
         connection.execute(
-          "CREATE INDEX IF NOT EXISTS idx_network_rates_date "
-          "ON network_rates (date)"
+          "CREATE INDEX IF NOT EXISTS idx_network_rates_date " "ON network_rates (date)"
         )
         connection.execute(
           """
@@ -123,9 +122,7 @@ class RateDatabase:
       logger.warning("Database error during range get: %s", error)
     return result
 
-  def set(
-    self, network: str, date: str, home: str, spend: str, record: dict[str, Any]
-  ) -> None:
+  def set(self, network: str, date: str, home: str, spend: str, record: dict[str, Any]) -> None:
     value = dict(record)
     value["_saved_at"] = value.get("_saved_at") or dt.datetime.now(dt.timezone.utc).isoformat()
     try:
@@ -140,9 +137,14 @@ class RateDatabase:
             saved_at = excluded.saved_at, raw_data = excluded.raw_data
           """,
           (
-            network.lower(), date, home.upper(), spend.upper(), value.get("rate"),
+            network.lower(),
+            date,
+            home.upper(),
+            spend.upper(),
+            value.get("rate"),
             value.get("network_benchmark") or value.get("benchmark"),
-            value["_saved_at"], json.dumps(value, ensure_ascii=False),
+            value["_saved_at"],
+            json.dumps(value, ensure_ascii=False),
           ),
         )
         connection.commit()
@@ -163,7 +165,10 @@ class RateDatabase:
       return None
 
   def has_benchmark_rates(
-    self, source: str, dates: list[dt.date], home: str,
+    self,
+    source: str,
+    dates: list[dt.date],
+    home: str,
     spend_currencies: Iterable[str] | None = None,
   ) -> bool:
     date_strings = sorted({date.strftime(DATE_FMT) for date in dates})
@@ -200,17 +205,18 @@ class RateDatabase:
   ) -> None:
     self.set_benchmarks([(source, date, base, quote, rate, raw_data)])
 
-  def set_benchmarks(
-    self, records: Iterable[tuple[str, str, str, str, float, Any | None]]
-  ) -> None:
+  def set_benchmarks(self, records: Iterable[tuple[str, str, str, str, float, Any | None]]) -> None:
     rows = []
     saved_at = dt.datetime.now(dt.timezone.utc).isoformat()
     for source, date, base, quote, rate, raw_data in records:
       raw_value = (
         json.dumps(raw_data, ensure_ascii=False)
-        if raw_data and not isinstance(raw_data, str) else raw_data
+        if raw_data and not isinstance(raw_data, str)
+        else raw_data
       )
-      rows.append((source.lower(), str(date), base.upper(), quote.upper(), rate, saved_at, raw_value))
+      rows.append(
+        (source.lower(), str(date), base.upper(), quote.upper(), rate, saved_at, raw_value)
+      )
     if not rows:
       return
     try:

@@ -38,22 +38,21 @@ class HttpClient:
       logger.info("[HTTP GET] Initiating request to %s%s%s", url, param_str, attempt_str)
       start_time = time.time()
       try:
-        response = self.session.get(
-          url, headers=headers, params=params, timeout=30
-        )
+        response = self.session.get(url, headers=headers, params=params, timeout=30)
         elapsed = time.time() - start_time
         logger.info("[HTTP %s] Completed in %.2fs from %s", response.status_code, elapsed, url)
         if response.status_code == 200:
           return response.json()
         if response.status_code in (400, 404):
-          logger.warning("[HTTP %s] Resource not found or not yet published at %s",
-                         response.status_code, url)
+          logger.warning(
+            "[HTTP %s] Resource not found or not yet published at %s", response.status_code, url
+          )
           return None
-        logger.warning("[HTTP %s] Unexpected status response from %s",
-                       response.status_code, url)
+        logger.warning("[HTTP %s] Unexpected status response from %s", response.status_code, url)
       except requests.exceptions.RequestException as error:
-        logger.warning("[HTTP ERROR] Network exception after %.2fs: %s",
-                       time.time() - start_time, error)
+        logger.warning(
+          "[HTTP ERROR] Network exception after %.2fs: %s", time.time() - start_time, error
+        )
       except json.JSONDecodeError as error:
         logger.error("[JSON ERROR] Failed to decode JSON from %s: %s", url, error)
       except Exception as error:  # pylint: disable=broad-except
