@@ -143,6 +143,8 @@ class UnionPayProvider(NetworkProvider):
     return {"rate": rate, "bill": round(rate * float(amount), 4)}
 
 
-visa_provider = VisaProvider()
-mastercard_provider = MastercardProvider()
-unionpay_provider = UnionPayProvider()
+all_network_providers: list[NetworkProvider] = [
+  VisaProvider(),
+  MastercardProvider(),
+  UnionPayProvider(),
+]

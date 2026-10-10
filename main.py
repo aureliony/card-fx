@@ -9,7 +9,7 @@ import numpy as np
 from tabulate import tabulate
 
 from fx_benchmarks import benchmark_service
-from fx_networks import mastercard_provider, unionpay_provider, visa_provider
+from fx_networks import all_network_providers
 
 logger = logging.getLogger(__file__)
 
@@ -92,61 +92,44 @@ def analyze_currency(
   spending_amount: float = 100_000,
 ) -> dict[str, Any] | None:
   """Gather rates and markups for a single spend currency."""
-  markups_by_net = {"Visa": [], "Mastercard": [], "UnionPay": []}
-  rates_by_net = {"Visa": [], "Mastercard": [], "UnionPay": []}
+  markups_by_net = {provider.network: [] for provider in all_network_providers}
   valid_days = 0
 
-  visa_rates = visa_provider.lookup_many(
-    dates, home_curr, spend_curr, spending_amount
-  )
-  mastercard_rates = mastercard_provider.lookup_many(
-    dates, home_curr, spend_curr, spending_amount
-  )
-  unionpay_rates = unionpay_provider.lookup_many(
-    dates, home_curr, spend_curr, spending_amount
-  )
+  network_rates = [
+    provider.lookup_many(dates, home_curr, spend_curr, spending_amount)
+    for provider in all_network_providers
+  ]
 
-  for target_date, v, m, u in zip(
-    dates, visa_rates, mastercard_rates, unionpay_rates, strict=True
+  for target_date, daily_rates in zip(
+    dates, zip(*network_rates, strict=True), strict=True
   ):
-
     benchmark, _ = benchmark_service.get(
       target_date, home_curr, spend_curr
     )
 
-    # Require rates for all three networks and a neutral benchmark rate
+    # Require rates for all networks and a neutral benchmark rate.
     if (
-      v
-      and m
-      and u
-      and v.get("rate")
-      and m.get("rate")
-      and u.get("rate")
-      and benchmark is not None
+      benchmark is None
+      or not all(rate_data and rate_data.get("rate") for rate_data in daily_rates)
     ):
-      v_rate, m_rate, u_rate = v["rate"], m["rate"], u["rate"]
+      continue
 
-      # Calculate markup % over neutral benchmark
-      v_markup = ((v_rate - benchmark) / benchmark) * 100.0
-      m_markup = ((m_rate - benchmark) / benchmark) * 100.0
-      u_markup = ((u_rate - benchmark) / benchmark) * 100.0
-
-      markups_by_net["Visa"].append(v_markup)
-      markups_by_net["Mastercard"].append(m_markup)
-      markups_by_net["UnionPay"].append(u_markup)
-
-      rates_by_net["Visa"].append(v_rate)
-      rates_by_net["Mastercard"].append(m_rate)
-      rates_by_net["UnionPay"].append(u_rate)
-
-      valid_days += 1
+    for provider, rate_data in zip(
+      all_network_providers, daily_rates, strict=True
+    ):
+      rate = rate_data["rate"]
+      markups_by_net[provider.network].append(
+        ((rate - benchmark) / benchmark) * 100.0
+      )
+    valid_days += 1
 
   if valid_days < 3:
     return None
 
   # Calculate 25th, 50th (median), 75th percentiles of markups
   stats = {}
-  for net in ["Visa", "Mastercard", "UnionPay"]:
+  for provider in all_network_providers:
+    net = provider.network
     p25, p50, p75 = np.percentile(markups_by_net[net], [25, 50, 75])
     stats[net] = {"p25": p25, "p50": p50, "p75": p75}
 
@@ -183,7 +166,7 @@ def main(argv: list[str] | None = None) -> None:
   print("=" * 100)
 
   summary_table = []
-  wins_counter = {"Visa": 0, "Mastercard": 0, "UnionPay": 0}
+  wins_counter = {provider.network: 0 for provider in all_network_providers}
 
   for idx, curr_code in enumerate(currencies, start=1):
       # Skip if spending currency is the same as home currency
@@ -206,28 +189,27 @@ def main(argv: list[str] | None = None) -> None:
       print(f"Done ({res['days']} trading days). Best: {res['best']}")
       wins_counter[res["best"]] += 1
 
-      v_p = res["stats"]["Visa"]
-      m_p = res["stats"]["Mastercard"]
-      u_p = res["stats"]["UnionPay"]
-
       summary_table.append(
         [
           curr_code,
-          # Visa 25 / 50 / 75
-          f"{v_p['p25']:+.2f} / {v_p['p50']:+.2f} / {v_p['p75']:+.2f}%",
-          # MC 25 / 50 / 75
-          f"{m_p['p25']:+.2f} / {m_p['p50']:+.2f} / {m_p['p75']:+.2f}%",
-          # UP 25 / 50 / 75
-          f"{u_p['p25']:+.2f} / {u_p['p50']:+.2f} / {u_p['p75']:+.2f}%",
+          *[
+            (
+              f"{res['stats'][provider.network]['p25']:+.2f} / "
+              f"{res['stats'][provider.network]['p50']:+.2f} / "
+              f"{res['stats'][provider.network]['p75']:+.2f}%"
+            )
+            for provider in all_network_providers
+          ],
           res["best"],
         ]
       )
 
   headers = [
     "Currency",
-    "Visa (P25/P50/P75)",
-    "Mastercard (P25/P50/P75)",
-    "UnionPay (P25/P50/P75)",
+    *[
+      f"{provider.network} (P25/P50/P75)"
+      for provider in all_network_providers
+    ],
     "Lowest Spread",
   ]
 

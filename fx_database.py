@@ -18,10 +18,10 @@ class RateDatabase:
   """Stores and retrieves network and benchmark rates in SQLite."""
 
   _init_lock = threading.Lock()
-  _initialized_path: str | None = None
 
   def __init__(self, path: str = DB_PATH) -> None:
     self.path = path
+    self._init_db()
 
   def _get_connection(self) -> sqlite3.Connection:
     directory = os.path.dirname(os.path.abspath(self.path))
@@ -33,10 +33,10 @@ class RateDatabase:
     return connection
 
   def _init_db(self) -> None:
-    if self._initialized_path == self.path and os.path.exists(self.path):
+    if os.path.exists(self.path):
       return
     with self._init_lock:
-      if self._initialized_path == self.path and os.path.exists(self.path):
+      if os.path.exists(self.path):
         return
       with self._get_connection() as connection:
         connection.execute("PRAGMA journal_mode=WAL")
@@ -70,7 +70,6 @@ class RateDatabase:
           "ON benchmark_rates (date, base, quote)"
         )
         connection.commit()
-      self._initialized_path = self.path
 
   @staticmethod
   def _row_value(row: sqlite3.Row) -> dict[str, Any]:
@@ -89,7 +88,6 @@ class RateDatabase:
     return result
 
   def get(self, network: str, date: str, home: str, spend: str) -> dict[str, Any] | None:
-    self._init_db()
     try:
       with self._get_connection() as connection:
         row = connection.execute(
@@ -107,7 +105,6 @@ class RateDatabase:
   def get_range(
     self, network: str, home: str, spend: str, dates: list[dt.date]
   ) -> dict[str, dict[str, Any]]:
-    self._init_db()
     date_strings = sorted({date.strftime(DATE_FMT) for date in dates})
     if not date_strings:
       return {}
@@ -129,7 +126,6 @@ class RateDatabase:
   def set(
     self, network: str, date: str, home: str, spend: str, record: dict[str, Any]
   ) -> None:
-    self._init_db()
     value = dict(record)
     value["_saved_at"] = value.get("_saved_at") or dt.datetime.now(dt.timezone.utc).isoformat()
     try:
@@ -154,7 +150,6 @@ class RateDatabase:
       logger.warning("Database error during set: %s", error)
 
   def get_benchmark(self, source: str, date: str, base: str, quote: str) -> float | None:
-    self._init_db()
     try:
       with self._get_connection() as connection:
         row = connection.execute(
@@ -171,7 +166,6 @@ class RateDatabase:
     self, source: str, dates: list[dt.date], home: str,
     spend_currencies: Iterable[str] | None = None,
   ) -> bool:
-    self._init_db()
     date_strings = sorted({date.strftime(DATE_FMT) for date in dates})
     if not date_strings:
       return False
@@ -219,7 +213,6 @@ class RateDatabase:
       rows.append((source.lower(), str(date), base.upper(), quote.upper(), rate, saved_at, raw_value))
     if not rows:
       return
-    self._init_db()
     try:
       with self._get_connection() as connection:
         connection.executemany(
