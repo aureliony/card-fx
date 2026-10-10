@@ -14,6 +14,26 @@ from fx.networks import all_network_providers
 
 logger = logging.getLogger(__file__)
 
+REPORT_WIDTH = 105
+PERCENTILES = (0, 25, 50, 75, 100)
+PERCENTILE_KEYS = tuple(f"p{percentile}" for percentile in PERCENTILES)
+PERCENTILE_HEADER = "/".join(f"P{percentile}" for percentile in PERCENTILES)
+MARKUP_FORMAT = " / ".join("{:+.2f}" for _ in PERCENTILES) + "%"
+PERCENTILE_DESCRIPTION = " / ".join(
+  f"{percentile}th%" if percentile != 50 else "Median (50th%)" for percentile in PERCENTILES
+)
+
+
+def print_separator(leading_newline: bool = False) -> None:
+  """Print the report section separator."""
+  prefix = "\n" if leading_newline else ""
+  print(prefix + "=" * REPORT_WIDTH)
+
+
+def format_markup_stats(stats: dict[str, float]) -> str:
+  """Format markup percentiles for a summary table cell."""
+  return MARKUP_FORMAT.format(*(stats[key] for key in PERCENTILE_KEYS))
+
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   """Parse command-line options for the FX comparison."""
@@ -94,12 +114,12 @@ def analyze_currency(
   if valid_days < 3:
     return None
 
-  # Calculate 25th, 50th (median), 75th percentiles of markups
+  # Calculate 0th, 25th, 50th (median), 75th, and 100th percentiles of markups
   stats = {}
   for provider in all_network_providers:
     net = provider.network
-    p25, p50, p75 = np.percentile(markups_by_net[net], [25, 50, 75])
-    stats[net] = {"p25": p25, "p50": p50, "p75": p75}
+    percentile_values = np.percentile(markups_by_net[net], PERCENTILES)
+    stats[net] = dict(zip(PERCENTILE_KEYS, percentile_values, strict=True))
 
   # Best network determined by lowest median markup
   best_network = min(stats, key=lambda k: stats[k]["p50"])
@@ -121,7 +141,7 @@ def main(argv: list[str] | None = None) -> None:
   dates = [yesterday - dt.timedelta(days=i) for i in range(days_back)]
   currencies = args.currencies
 
-  print("=" * 100)
+  print_separator()
   print(
     f"{days_back}-DAY FX SPREAD & BENCHMARK MARKUP COMPARISON " f"({len(currencies)} CURRENCIES)"
   )
@@ -130,7 +150,7 @@ def main(argv: list[str] | None = None) -> None:
   print(
     f"Date Range           : {dates[-1].strftime('%Y-%m-%d')} to {dates[0].strftime('%Y-%m-%d')}"
   )
-  print("=" * 100)
+  print_separator()
 
   summary_table = []
   wins_counter = {provider.network: 0 for provider in all_network_providers}
@@ -158,11 +178,7 @@ def main(argv: list[str] | None = None) -> None:
       [
         curr_code,
         *[
-          (
-            f"{res['stats'][provider.network]['p25']:+.2f} / "
-            f"{res['stats'][provider.network]['p50']:+.2f} / "
-            f"{res['stats'][provider.network]['p75']:+.2f}%"
-          )
+          format_markup_stats(res["stats"][provider.network])
           for provider in all_network_providers
         ],
         res["best"],
@@ -171,25 +187,25 @@ def main(argv: list[str] | None = None) -> None:
 
   headers = [
     "Currency",
-    *[f"{provider.network} (P25/P50/P75)" for provider in all_network_providers],
+    *[f"{provider.network} ({PERCENTILE_HEADER})" for provider in all_network_providers],
     "Lowest Spread",
   ]
 
-  print("\n" + "=" * 105)
+  print_separator(leading_newline=True)
   print(f"{days_back}-DAY MARKUP OVER BENCHMARK PERCENTILE SUMMARY (Home: {home_currency})")
-  print("Format: 25th% / Median (50th%) / 75th% Markup (Lower is better)")
-  print("=" * 105)
+  print(f"Format: {PERCENTILE_DESCRIPTION} Markup (Lower is better)")
+  print_separator()
 
   print(tabulate(summary_table, headers=headers, tablefmt="github"))
 
   # Leaderboard summary
   total_analyzed = len(summary_table)
-  print("\n" + "=" * 105)
+  print_separator(leading_newline=True)
   print("OVERALL LEADERBOARD " f"(Cheapest Median Markup across {len(currencies)} Currencies):")
   for net, count in sorted(wins_counter.items(), key=lambda x: x[1], reverse=True):
     pct = (count / total_analyzed * 100) if total_analyzed else 0
     print(f"  {net:<12}: Best choice for {count:02d} / {total_analyzed} currencies ({pct:.1f}%)")
-  print("=" * 105)
+  print_separator()
 
 
 if __name__ == "__main__":
