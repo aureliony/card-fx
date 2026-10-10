@@ -13,6 +13,23 @@ Card FX is a Python project that analyzes and compares currency exchange rates o
 *   **Impersonation:** Uses `curl_cffi` to mimic real browser requests, helping to bypass basic bot detection.
 *   **Logging:** Integrated logging to track network requests, cache hits, and potential errors.
 
+## Command-line usage
+
+Run the default 30-day comparison using SGD as the card billing currency:
+
+```bash
+python main.py
+```
+
+The analysis can be customized with command-line options:
+
+```bash
+python main.py --home-currency USD --days-back 7 --spending-amount 250 --currencies EUR GBP JPY
+```
+
+The default spending amount is `100,000` in the spending currency. Use
+`python main.py --help` to see all available options.
+
 ## Credits
 
 *   **[anxkhn/best_rates](https://github.com/anxkhn/best_rates)** — The Visa and Mastercard API call logic in this project is based on the work from this repository.

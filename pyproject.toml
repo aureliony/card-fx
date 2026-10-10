@@ -18,7 +18,14 @@ dependencies = [
 card-fx = "main:main"
 
 [tool.setuptools]
-py-modules = ["fx_api", "main"]
+py-modules = [
+    "fx_benchmarks",
+    "fx_config",
+    "fx_database",
+    "fx_http",
+    "fx_networks",
+    "main",
+]
 
 [tool.ruff]
 line-length = 100
