@@ -21,54 +21,62 @@ class RateDatabase:
 
   def __init__(self, path: str = DB_PATH) -> None:
     self.path = path
+    self._thread_local = threading.local()
     self._init_db()
 
+  def _init_db(self) -> None:
+    with self._init_lock:
+      connection = self._get_connection()
+      connection.execute("PRAGMA journal_mode=WAL")
+      connection.execute("PRAGMA synchronous=NORMAL")
+      connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS network_rates (
+          network TEXT NOT NULL, date TEXT NOT NULL, home TEXT NOT NULL,
+          spend TEXT NOT NULL, rate REAL, network_benchmark REAL,
+          saved_at TEXT, raw_data TEXT,
+          PRIMARY KEY (network, date, home, spend)
+        )
+        """
+      )
+      connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_network_rates_date " "ON network_rates (date)"
+      )
+      connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS benchmark_rates (
+          source TEXT NOT NULL, date TEXT NOT NULL, base TEXT NOT NULL,
+          quote TEXT NOT NULL, rate REAL NOT NULL, saved_at TEXT,
+          raw_data TEXT,
+          PRIMARY KEY (source, date, base, quote)
+        )
+        """
+      )
+      connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_benchmark_rates_lookup "
+        "ON benchmark_rates (date, base, quote)"
+      )
+      connection.commit()
+
   def _get_connection(self) -> sqlite3.Connection:
+    connection = getattr(self._thread_local, "connection", None)
+    if connection is not None:
+      return connection
     directory = os.path.dirname(os.path.abspath(self.path))
     if directory and not os.path.exists(directory):
       os.makedirs(directory, exist_ok=True)
     connection = sqlite3.connect(self.path, timeout=30.0)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA busy_timeout = 30000")
+    self._thread_local.connection = connection
     return connection
 
-  def _init_db(self) -> None:
-    if os.path.exists(self.path):
-      return
-    with self._init_lock:
-      if os.path.exists(self.path):
-        return
-      with self._get_connection() as connection:
-        connection.execute("PRAGMA journal_mode=WAL")
-        connection.execute("PRAGMA synchronous=NORMAL")
-        connection.execute(
-          """
-          CREATE TABLE IF NOT EXISTS network_rates (
-            network TEXT NOT NULL, date TEXT NOT NULL, home TEXT NOT NULL,
-            spend TEXT NOT NULL, rate REAL, network_benchmark REAL,
-            saved_at TEXT, raw_data TEXT,
-            PRIMARY KEY (network, date, home, spend)
-          )
-          """
-        )
-        connection.execute(
-          "CREATE INDEX IF NOT EXISTS idx_network_rates_date " "ON network_rates (date)"
-        )
-        connection.execute(
-          """
-          CREATE TABLE IF NOT EXISTS benchmark_rates (
-            source TEXT NOT NULL, date TEXT NOT NULL, base TEXT NOT NULL,
-            quote TEXT NOT NULL, rate REAL NOT NULL, saved_at TEXT,
-            raw_data TEXT,
-            PRIMARY KEY (source, date, base, quote)
-          )
-          """
-        )
-        connection.execute(
-          "CREATE INDEX IF NOT EXISTS idx_benchmark_rates_lookup "
-          "ON benchmark_rates (date, base, quote)"
-        )
-        connection.commit()
+  def __del__(self) -> None:
+    """Close the connection owned by the calling thread."""
+    connection = getattr(self._thread_local, "connection", None)
+    if connection is not None:
+      connection.close()
+      del self._thread_local.connection
 
   @staticmethod
   def _row_value(row: sqlite3.Row) -> dict[str, Any]:
