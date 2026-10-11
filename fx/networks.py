@@ -165,18 +165,16 @@ class UnionPayProvider(NetworkProvider):
     )
     if not payload or "exchangeRateJson" not in payload:
       return None
-    rate = next(
-      (
-        to_float(item.get("rateData"))
-        for item in payload["exchangeRateJson"]
-        if item.get("baseCur", "").upper() == home.upper()
-        and item.get("transCur", "").upper() == spend.upper()
-      ),
-      None,
-    )
+    rate = None
+    for item in payload["exchangeRateJson"]:
+      base = item.get("baseCur", "")
+      trans = item.get("transCur", "")
+      item_rate = to_float(item.get("rateData"))
+      self.db.set("unionpay", date_string, base, trans, {"rate": item_rate})
+      if rate is None and base.upper() == home.upper() and trans.upper() == spend.upper():
+        rate = item_rate
     if rate is None:
       return None
-    self.db.set("unionpay", date_string, home, spend, {"rate": rate})
     return {"rate": rate, "bill": round(rate * float(amount), 4)}
 
 
