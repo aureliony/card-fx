@@ -63,6 +63,14 @@ def percentile(values: Sequence[float], percentiles: Sequence[float]) -> list[fl
   return results
 
 
+def split_dates_by_day_type(dates: Sequence[dt.date]) -> dict[str, list[dt.date]]:
+  """Split dates into weekday and weekend groups."""
+  return {
+    "Weekdays": [target_date for target_date in dates if target_date.weekday() < 5],
+    "Weekends": [target_date for target_date in dates if target_date.weekday() >= 5],
+  }
+
+
 async def analyze_currency(
   dates: list[dt.date],
   home_curr: str,
@@ -123,8 +131,95 @@ async def analyze_currency(
   }
 
 
+async def analyze_period(
+  period_name: str,
+  dates: Sequence[dt.date],
+  home_currency: str,
+  currencies: Sequence[str],
+  spending_amount: float,
+  providers: Sequence[NetworkProvider],
+  benchmarks: BenchmarkService,
+) -> None:
+  """Analyze and print results for one date group."""
+  spending_currencies = [curr_code for curr_code in currencies if curr_code != home_currency]
+  print_separator(leading_newline=True)
+  print(f"{period_name.upper()} ANALYSIS ({len(dates)} DAYS)")
+  if not dates:
+    print("No dates in this group.")
+    return
+
+  print(
+    f"Date Range           : {dates[-1].strftime('%Y-%m-%d')} "
+    f"to {dates[0].strftime('%Y-%m-%d')}"
+  )
+
+  summary_table = []
+  wins_counter = {provider.network: 0 for provider in providers}
+  currency_count = len(spending_currencies)
+
+  async def analyze_with_progress(
+    idx: int, curr_code: str
+  ) -> dict[str, Any] | None:
+    print(f"[{idx:02d}/{currency_count}] Processing {curr_code}...", flush=True)
+    res = await analyze_currency(
+      list(dates), home_currency, curr_code, spending_amount, providers, benchmarks
+    )
+    if not res:
+      print(
+        f"[{idx:02d}/{currency_count}] {curr_code}: "
+        "Incomplete/insufficient benchmark data."
+      )
+    else:
+      print(
+        f"[{idx:02d}/{currency_count}] {curr_code}: Done ({res['days']} samples). "
+        f"Best: {res['best']}"
+      )
+    return res
+
+  results = await asyncio.gather(*(
+    analyze_with_progress(idx, curr_code)
+    for idx, curr_code in enumerate(spending_currencies, start=1)
+  ))
+
+  for curr_code, res in zip(spending_currencies, results, strict=True):
+    if not res:
+      continue
+
+    wins_counter[res["best"]] += 1
+    summary_table.append(
+      [
+        curr_code,
+        *[
+          format_markup_stats(res["stats"][provider.network])
+          for provider in providers
+        ],
+        res["best"],
+      ]
+    )
+
+  headers = [
+    "Currency",
+    *[provider.network for provider in providers],
+    "Lowest Spread",
+  ]
+
+  print_separator()
+  print(f"{period_name.upper()} MARKUP OVER BENCHMARK PERCENTILE SUMMARY (Home: {home_currency})")
+  print(f"Format: {PERCENTILE_DESCRIPTION} Markup (Lower is better)")
+  print_separator()
+  print(tabulate(summary_table, headers=headers, tablefmt="github"))
+
+  total_analyzed = len(summary_table)
+  print_separator(leading_newline=True)
+  print(f"{period_name.upper()} LEADERBOARD (Cheapest Median Markup):")
+  for net, count in sorted(wins_counter.items(), key=lambda item: item[1], reverse=True):
+    pct = (count / total_analyzed * 100) if total_analyzed else 0
+    print(f"  {net:<12}: Best choice for {count:02d} / {total_analyzed} currencies ({pct:.1f}%)")
+  print_separator()
+
+
 async def main_async(args: argparse.Namespace) -> None:
-  """Run the configured FX comparison and print percentile and leaderboard results."""
+  """Run weekday and weekend FX comparisons."""
   async with HttpClient() as client:
     benchmarks = BenchmarkService(client=client)
     providers = create_network_providers(client)
@@ -146,62 +241,20 @@ async def main_async(args: argparse.Namespace) -> None:
     )
     print_separator()
 
-    summary_table = []
-    wins_counter = {provider.network: 0 for provider in providers}
+    spending_currencies = [curr_code for curr_code in currencies if curr_code != home_currency]
+    if spending_currencies:
+      await benchmarks.prefetch(dates, home_currency, spending_currencies)
 
-    for idx, curr_code in enumerate(currencies, start=1):
-      # Skip if spending currency is the same as home currency
-      if curr_code == home_currency:
-        continue
-
-      print(
-        f"[{idx:02d}/{len(currencies)}] Processing {curr_code}...",
-        end=" ",
-        flush=True,
+    for period_name, period_dates in split_dates_by_day_type(dates).items():
+      await analyze_period(
+        period_name,
+        period_dates,
+        home_currency,
+        currencies,
+        args.spending_amount,
+        providers,
+        benchmarks,
       )
-      res = await analyze_currency(
-        dates, home_currency, curr_code, args.spending_amount, providers, benchmarks
-      )
-
-      if not res:
-        print("Incomplete/insufficient benchmark data.")
-        continue
-
-      print(f"Done ({res['days']} trading days). Best: {res['best']}")
-      wins_counter[res["best"]] += 1
-
-      summary_table.append(
-        [
-          curr_code,
-          *[
-            format_markup_stats(res["stats"][provider.network])
-            for provider in providers
-          ],
-          res["best"],
-        ]
-      )
-
-    headers = [
-      "Currency",
-      *[provider.network for provider in providers],
-      "Lowest Spread",
-    ]
-
-    print_separator(leading_newline=True)
-    print(f"{days_back}-DAY MARKUP OVER BENCHMARK PERCENTILE SUMMARY (Home: {home_currency})")
-    print(f"Format: {PERCENTILE_DESCRIPTION} Markup (Lower is better)")
-    print_separator()
-
-    print(tabulate(summary_table, headers=headers, tablefmt="github"))
-
-    # Leaderboard summary
-    total_analyzed = len(summary_table)
-    print_separator(leading_newline=True)
-    print("OVERALL LEADERBOARD " f"(Cheapest Median Markup across {len(currencies)} Currencies):")
-    for net, count in sorted(wins_counter.items(), key=lambda x: x[1], reverse=True):
-      pct = (count / total_analyzed * 100) if total_analyzed else 0
-      print(f"  {net:<12}: Best choice for {count:02d} / {total_analyzed} currencies ({pct:.1f}%)")
-    print_separator()
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
