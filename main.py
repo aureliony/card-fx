@@ -140,7 +140,7 @@ async def main_async(args: argparse.Namespace) -> None:
       f"{days_back}-DAY FX SPREAD & BENCHMARK MARKUP COMPARISON " f"({len(currencies)} CURRENCIES)"
     )
     print(f"Card Billing Currency: {home_currency}")
-    print("Baseline Benchmark   : Frankfurter (ECB Reference Rates)")
+    print("Baseline Benchmark   : Frankfurter (Blended Reference Rates from 100+ Central Banks)")
     print(
       f"Date Range           : {dates[-1].strftime('%Y-%m-%d')} to {dates[0].strftime('%Y-%m-%d')}"
     )
