@@ -3,9 +3,9 @@
 import argparse
 import datetime as dt
 import logging
+from collections.abc import Sequence
 from typing import Any
 
-import numpy as np
 from tabulate import tabulate
 
 from fx.benchmarks import benchmark_service
@@ -15,10 +15,9 @@ from fx.networks import all_network_providers
 logger = logging.getLogger(__file__)
 
 REPORT_WIDTH = 105
-PERCENTILES = (0, 25, 50, 75, 100)
+PERCENTILES = (25, 50, 75)
 PERCENTILE_KEYS = tuple(f"p{percentile}" for percentile in PERCENTILES)
-PERCENTILE_HEADER = "/".join(f"P{percentile}" for percentile in PERCENTILES)
-MARKUP_FORMAT = " / ".join("{:+.2f}" for _ in PERCENTILES) + "%"
+MARKUP_FORMAT = " / ".join("{:+.2f}" for _ in PERCENTILES)
 PERCENTILE_DESCRIPTION = " / ".join(
   f"{percentile}th%" if percentile != 50 else "Median (50th%)" for percentile in PERCENTILES
 )
@@ -33,6 +32,28 @@ def print_separator(leading_newline: bool = False) -> None:
 def format_markup_stats(stats: dict[str, float]) -> str:
   """Format markup percentiles for a summary table cell."""
   return MARKUP_FORMAT.format(*(stats[key] for key in PERCENTILE_KEYS))
+
+
+def percentile(values: Sequence[float], percentiles: Sequence[float]) -> list[float]:
+  """Return percentiles using linear interpolation between sorted values."""
+  if not values:
+    raise ValueError("percentile requires at least one value")
+  if any(not 0 <= value <= 100 for value in percentiles):
+    raise ValueError("percentiles must be between 0 and 100")
+
+  sorted_values = sorted(values)
+  results = []
+  for value in percentiles:
+    rank = (value / 100) * (len(sorted_values) - 1)
+    lower_index = int(rank)
+    upper_index = min(lower_index + 1, len(sorted_values) - 1)
+    fraction = rank - lower_index
+    results.append(
+      sorted_values[lower_index] + (
+        fraction * (sorted_values[upper_index] - sorted_values[lower_index])
+      )
+    )
+  return results
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -114,11 +135,11 @@ def analyze_currency(
   if valid_days < 3:
     return None
 
-  # Calculate 0th, 25th, 50th (median), 75th, and 100th percentiles of markups
+  # Calculate the 25th, 50th (median), and 75th percentiles of markups.
   stats = {}
   for provider in all_network_providers:
     net = provider.network
-    percentile_values = np.percentile(markups_by_net[net], PERCENTILES)
+    percentile_values = percentile(markups_by_net[net], PERCENTILES)
     stats[net] = dict(zip(PERCENTILE_KEYS, percentile_values, strict=True))
 
   # Best network determined by lowest median markup
@@ -187,7 +208,7 @@ def main(argv: list[str] | None = None) -> None:
 
   headers = [
     "Currency",
-    *[f"{provider.network} ({PERCENTILE_HEADER})" for provider in all_network_providers],
+    *[provider.network for provider in all_network_providers],
     "Lowest Spread",
   ]
 
