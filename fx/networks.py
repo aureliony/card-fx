@@ -1,10 +1,10 @@
 """Network-specific Visa, Mastercard, and UnionPay rate providers."""
 
+import asyncio
 import datetime as dt
 from abc import abstractmethod
 from typing import Any
 
-from fx.benchmarks import BenchmarkService, benchmark_service
 from fx.config import (
   DATE_FMT,
   MASTERCARD_HEADERS,
@@ -15,7 +15,7 @@ from fx.config import (
   VISA_URL,
 )
 from fx.database import RateDatabase, database
-from fx.http import HttpClient, http_client, to_float
+from fx.http import HttpClient, to_float
 
 
 class NetworkProvider:
@@ -24,12 +24,12 @@ class NetworkProvider:
   def __init__(
     self,
     network: str,
+    client: HttpClient,
     db: RateDatabase = database,
-    client: HttpClient = http_client,
-    benchmarks: BenchmarkService = benchmark_service,
   ) -> None:
     self.network = network
-    self.db, self.client, self.benchmarks = db, client, benchmarks
+    self.db = db
+    self.client = client
 
   def _cached_range(
     self, dates: list[dt.date], home: str, spend: str, amount: float
@@ -48,7 +48,7 @@ class NetworkProvider:
     return results
 
   @abstractmethod
-  def lookup(
+  async def lookup(
     self,
     date: dt.date,
     home: str,
@@ -57,17 +57,23 @@ class NetworkProvider:
   ) -> dict[str, Any] | None:
     raise NotImplementedError
 
-  def lookup_many(
+  async def lookup_many(
     self,
     dates: list[dt.date],
     home: str,
     spend: str,
     amount: float,
   ) -> list[dict[str, Any] | None]:
-    self.benchmarks.prefetch(dates, home, [spend])
     cached = self._cached_range(dates, home, spend, amount)
+    pending = [
+      self.lookup(date, home, spend, amount)
+      for date in dates
+      if date.strftime(DATE_FMT) not in cached
+    ]
+    fetched = await asyncio.gather(*pending)
+    fetched_iter = iter(fetched)
     return [
-      cached.get(date.strftime(DATE_FMT)) or self.lookup(date, home, spend, amount)
+      cached.get(date.strftime(DATE_FMT)) or next(fetched_iter)
       for date in dates
     ]
 
@@ -75,16 +81,15 @@ class NetworkProvider:
 class VisaProvider(NetworkProvider):
   def __init__(
     self,
+    client: HttpClient,
     db: RateDatabase = database,
-    client: HttpClient = http_client,
-    benchmarks: BenchmarkService = benchmark_service,
   ) -> None:
-    super().__init__("visa", db, client, benchmarks)
+    super().__init__("visa", client, db)
 
-  def lookup(self, date, home, spend, amount):
+  async def lookup(self, date, home, spend, amount):
     date_string = date.strftime(DATE_FMT)
     formatted_date = date.strftime("%m/%d/%Y")
-    payload = self.client.get(
+    payload = await self.client.get(
       VISA_URL,
       VISA_HEADERS,
       {
@@ -116,15 +121,14 @@ class VisaProvider(NetworkProvider):
 class MastercardProvider(NetworkProvider):
   def __init__(
     self,
+    client: HttpClient,
     db: RateDatabase = database,
-    client: HttpClient = http_client,
-    benchmarks: BenchmarkService = benchmark_service,
   ) -> None:
-    super().__init__("mastercard", db, client, benchmarks)
+    super().__init__("mastercard", client, db)
 
-  def lookup(self, date, home, spend, amount):
+  async def lookup(self, date, home, spend, amount):
     date_string = date.strftime(DATE_FMT)
-    payload = self.client.get(
+    payload = await self.client.get(
       MASTERCARD_URL,
       MASTERCARD_HEADERS,
       {
@@ -147,19 +151,18 @@ class MastercardProvider(NetworkProvider):
 class UnionPayProvider(NetworkProvider):
   def __init__(
     self,
+    client: HttpClient,
     db: RateDatabase = database,
-    client: HttpClient = http_client,
-    benchmarks: BenchmarkService = benchmark_service,
   ) -> None:
-    super().__init__("unionpay", db, client, benchmarks)
+    super().__init__("unionpay", client, db)
 
-  def lookup(self, date, home, spend, amount):
+  async def lookup(self, date, home, spend, amount):
     date_string = date.strftime(DATE_FMT)
     cached = self.db.get(self.network, date_string, home, spend)
     if cached and cached.get("rate"):
       rate = cached["rate"]
       return {"rate": rate, "bill": round(rate * float(amount), 4), "cached": True}
-    payload = self.client.get(
+    payload = await self.client.get(
       UNIONPAY_URL_TEMPLATE.format(date=date.strftime("%Y%m%d")),
       UNIONPAY_HEADERS,
     )
@@ -178,8 +181,10 @@ class UnionPayProvider(NetworkProvider):
     return {"rate": rate, "bill": round(rate * float(amount), 4)}
 
 
-all_network_providers: list[NetworkProvider] = [
-  VisaProvider(),
-  MastercardProvider(),
-  UnionPayProvider(),
-]
+def create_network_providers(client: HttpClient) -> list[NetworkProvider]:
+  """Create all network providers sharing one HTTP client."""
+  return [
+    VisaProvider(client=client),
+    MastercardProvider(client=client),
+    UnionPayProvider(client=client),
+  ]

@@ -10,6 +10,7 @@ Card FX is a Python project that analyzes and compares currency exchange rates o
 *   **Percentile & Markup Calculation:** Computes 25th, 50th (median), and 75th percentile markups over the benchmark rate.
 *   **Best Network Identification:** Determines which network offers the lowest median markup and which network was cheapest most often over the analysis period.
 *   **Local SQLite Caching:** Stores fetched rate data locally in an SQLite3 database to speed up subsequent requests, support efficient indexing, and eliminate file-rewrite bottlenecks.
+*   **Asynchronous HTTP:** Uses `curl_cffi.requests.AsyncSession` with concurrent provider requests and non-blocking retries.
 *   **Impersonation:** Uses `curl_cffi` to mimic real browser requests, helping to bypass basic bot detection.
 *   **Logging:** Integrated logging to track network requests, cache hits, and potential errors.
 

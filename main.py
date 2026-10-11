@@ -1,6 +1,7 @@
 """Command-line entry point for comparing card-network foreign-exchange markups."""
 
 import argparse
+import asyncio
 import datetime as dt
 import logging
 from collections.abc import Sequence
@@ -8,10 +9,16 @@ from typing import Any
 
 from tabulate import tabulate
 
-from fx.benchmarks import benchmark_service
+from fx.benchmarks import BenchmarkService
 from fx.config import DEFAULT_CURRENCIES, SUPPORTED_CURRENCIES
-from fx.networks import all_network_providers
+from fx.http import HttpClient
+from fx.networks import NetworkProvider, create_network_providers
 
+logging.basicConfig(
+  level=logging.WARNING,
+  format="[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s",
+  datefmt="%H:%M:%S",
+)
 logger = logging.getLogger(__file__)
 
 REPORT_WIDTH = 105
@@ -54,6 +61,147 @@ def percentile(values: Sequence[float], percentiles: Sequence[float]) -> list[fl
       )
     )
   return results
+
+
+async def analyze_currency(
+  dates: list[dt.date],
+  home_curr: str,
+  spend_curr: str,
+  spending_amount: float,
+  providers: Sequence[NetworkProvider],
+  benchmarks: BenchmarkService,
+) -> dict[str, Any] | None:
+  """Gather rates and markups for a single spend currency."""
+  markups_by_net = {provider.network: [] for provider in providers}
+  valid_days = 0
+
+  await benchmarks.prefetch(dates, home_curr, [spend_curr])
+  network_rates = await asyncio.gather(*(
+    provider.lookup_many(
+      dates, home_curr, spend_curr, spending_amount
+    )
+    for provider in providers
+  ))
+
+  benchmark_rates = await asyncio.gather(*(
+    benchmarks.get(target_date, home_curr, spend_curr)
+    for target_date in dates
+  ))
+  for daily_rates, (benchmark, _) in zip(
+    zip(*network_rates, strict=True), benchmark_rates, strict=True
+  ):
+
+    # Require rates for all networks and a neutral benchmark rate.
+    if benchmark is None or not all(
+      rate_data and rate_data.get("rate") for rate_data in daily_rates
+    ):
+      continue
+
+    for provider, rate_data in zip(providers, daily_rates, strict=True):
+      rate = rate_data["rate"]
+      markups_by_net[provider.network].append(((rate - benchmark) / benchmark) * 100.0)
+    valid_days += 1
+
+  if valid_days < 3:
+    return None
+
+  # Calculate the 25th, 50th (median), and 75th percentiles of markups.
+  stats = {}
+  for provider in providers:
+    net = provider.network
+    percentile_values = percentile(markups_by_net[net], PERCENTILES)
+    stats[net] = dict(zip(PERCENTILE_KEYS, percentile_values, strict=True))
+
+  # Best network determined by lowest median markup
+  best_network = min(stats, key=lambda k: stats[k]["p50"])
+
+  return {
+    "code": spend_curr,
+    "days": valid_days,
+    "stats": stats,
+    "best": best_network,
+  }
+
+
+async def main_async(args: argparse.Namespace) -> None:
+  """Run the configured FX comparison and print percentile and leaderboard results."""
+  async with HttpClient() as client:
+    benchmarks = BenchmarkService(client=client)
+    providers = create_network_providers(client)
+
+    home_currency = args.home_currency
+    days_back = args.days_back
+    yesterday = dt.date.today() - dt.timedelta(days=1)
+    dates = [yesterday - dt.timedelta(days=i) for i in range(days_back)]
+    currencies = args.currencies
+
+    print_separator()
+    print(
+      f"{days_back}-DAY FX SPREAD & BENCHMARK MARKUP COMPARISON " f"({len(currencies)} CURRENCIES)"
+    )
+    print(f"Card Billing Currency: {home_currency}")
+    print("Baseline Benchmark   : Frankfurter (ECB Reference Rates)")
+    print(
+      f"Date Range           : {dates[-1].strftime('%Y-%m-%d')} to {dates[0].strftime('%Y-%m-%d')}"
+    )
+    print_separator()
+
+    summary_table = []
+    wins_counter = {provider.network: 0 for provider in providers}
+
+    for idx, curr_code in enumerate(currencies, start=1):
+      # Skip if spending currency is the same as home currency
+      if curr_code == home_currency:
+        continue
+
+      print(
+        f"[{idx:02d}/{len(currencies)}] Processing {curr_code}...",
+        end=" ",
+        flush=True,
+      )
+      res = await analyze_currency(
+        dates, home_currency, curr_code, args.spending_amount, providers, benchmarks
+      )
+
+      if not res:
+        print("Incomplete/insufficient benchmark data.")
+        continue
+
+      print(f"Done ({res['days']} trading days). Best: {res['best']}")
+      wins_counter[res["best"]] += 1
+
+      summary_table.append(
+        [
+          curr_code,
+          *[
+            format_markup_stats(res["stats"][provider.network])
+            for provider in providers
+          ],
+          res["best"],
+        ]
+      )
+
+    headers = [
+      "Currency",
+      *[provider.network for provider in providers],
+      "Lowest Spread",
+    ]
+
+    print_separator(leading_newline=True)
+    print(f"{days_back}-DAY MARKUP OVER BENCHMARK PERCENTILE SUMMARY (Home: {home_currency})")
+    print(f"Format: {PERCENTILE_DESCRIPTION} Markup (Lower is better)")
+    print_separator()
+
+    print(tabulate(summary_table, headers=headers, tablefmt="github"))
+
+    # Leaderboard summary
+    total_analyzed = len(summary_table)
+    print_separator(leading_newline=True)
+    print("OVERALL LEADERBOARD " f"(Cheapest Median Markup across {len(currencies)} Currencies):")
+    for net, count in sorted(wins_counter.items(), key=lambda x: x[1], reverse=True):
+      pct = (count / total_analyzed * 100) if total_analyzed else 0
+      print(f"  {net:<12}: Best choice for {count:02d} / {total_analyzed} currencies ({pct:.1f}%)")
+    print_separator()
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -103,130 +251,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   return args
 
 
-def analyze_currency(
-  dates: list[dt.date],
-  home_curr: str,
-  spend_curr: str,
-  spending_amount: float,
-) -> dict[str, Any] | None:
-  """Gather rates and markups for a single spend currency."""
-  markups_by_net = {provider.network: [] for provider in all_network_providers}
-  valid_days = 0
-
-  network_rates = [
-    provider.lookup_many(dates, home_curr, spend_curr, spending_amount)
-    for provider in all_network_providers
-  ]
-
-  for target_date, daily_rates in zip(dates, zip(*network_rates, strict=True), strict=True):
-    benchmark, _ = benchmark_service.get(target_date, home_curr, spend_curr)
-
-    # Require rates for all networks and a neutral benchmark rate.
-    if benchmark is None or not all(
-      rate_data and rate_data.get("rate") for rate_data in daily_rates
-    ):
-      continue
-
-    for provider, rate_data in zip(all_network_providers, daily_rates, strict=True):
-      rate = rate_data["rate"]
-      markups_by_net[provider.network].append(((rate - benchmark) / benchmark) * 100.0)
-    valid_days += 1
-
-  if valid_days < 3:
-    return None
-
-  # Calculate the 25th, 50th (median), and 75th percentiles of markups.
-  stats = {}
-  for provider in all_network_providers:
-    net = provider.network
-    percentile_values = percentile(markups_by_net[net], PERCENTILES)
-    stats[net] = dict(zip(PERCENTILE_KEYS, percentile_values, strict=True))
-
-  # Best network determined by lowest median markup
-  best_network = min(stats, key=lambda k: stats[k]["p50"])
-
-  return {
-    "code": spend_curr,
-    "days": valid_days,
-    "stats": stats,
-    "best": best_network,
-  }
-
-
 def main(argv: list[str] | None = None) -> None:
-  """Run the configured FX comparison and print percentile and leaderboard results."""
+  """Run the asynchronous CLI entry point."""
   args = parse_args(argv)
-  home_currency = args.home_currency
-  days_back = args.days_back
-  yesterday = dt.date.today() - dt.timedelta(days=1)
-  dates = [yesterday - dt.timedelta(days=i) for i in range(days_back)]
-  currencies = args.currencies
-
-  print_separator()
-  print(
-    f"{days_back}-DAY FX SPREAD & BENCHMARK MARKUP COMPARISON " f"({len(currencies)} CURRENCIES)"
-  )
-  print(f"Card Billing Currency: {home_currency}")
-  print("Baseline Benchmark   : Frankfurter (ECB Reference Rates)")
-  print(
-    f"Date Range           : {dates[-1].strftime('%Y-%m-%d')} to {dates[0].strftime('%Y-%m-%d')}"
-  )
-  print_separator()
-
-  summary_table = []
-  wins_counter = {provider.network: 0 for provider in all_network_providers}
-
-  for idx, curr_code in enumerate(currencies, start=1):
-    # Skip if spending currency is the same as home currency
-    if curr_code == home_currency:
-      continue
-
-    print(
-      f"[{idx:02d}/{len(currencies)}] Processing {curr_code}...",
-      end=" ",
-      flush=True,
-    )
-    res = analyze_currency(dates, home_currency, curr_code, args.spending_amount)
-
-    if not res:
-      print("Incomplete/insufficient benchmark data.")
-      continue
-
-    print(f"Done ({res['days']} trading days). Best: {res['best']}")
-    wins_counter[res["best"]] += 1
-
-    summary_table.append(
-      [
-        curr_code,
-        *[
-          format_markup_stats(res["stats"][provider.network])
-          for provider in all_network_providers
-        ],
-        res["best"],
-      ]
-    )
-
-  headers = [
-    "Currency",
-    *[provider.network for provider in all_network_providers],
-    "Lowest Spread",
-  ]
-
-  print_separator(leading_newline=True)
-  print(f"{days_back}-DAY MARKUP OVER BENCHMARK PERCENTILE SUMMARY (Home: {home_currency})")
-  print(f"Format: {PERCENTILE_DESCRIPTION} Markup (Lower is better)")
-  print_separator()
-
-  print(tabulate(summary_table, headers=headers, tablefmt="github"))
-
-  # Leaderboard summary
-  total_analyzed = len(summary_table)
-  print_separator(leading_newline=True)
-  print("OVERALL LEADERBOARD " f"(Cheapest Median Markup across {len(currencies)} Currencies):")
-  for net, count in sorted(wins_counter.items(), key=lambda x: x[1], reverse=True):
-    pct = (count / total_analyzed * 100) if total_analyzed else 0
-    print(f"  {net:<12}: Best choice for {count:02d} / {total_analyzed} currencies ({pct:.1f}%)")
-  print_separator()
+  asyncio.run(main_async(args))
 
 
 if __name__ == "__main__":

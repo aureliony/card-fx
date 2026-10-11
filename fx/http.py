@@ -1,5 +1,6 @@
 """HTTP transport with browser impersonation, logging, and retries."""
 
+import asyncio
 import json
 import logging
 import time
@@ -17,14 +18,26 @@ def to_float(value: Any) -> float | None:
   except (TypeError, ValueError):
     return None
 
-
 class HttpClient:
   """Executes JSON GET requests with bounded retries."""
 
   def __init__(self) -> None:
-    self.session = requests.Session(impersonate="chrome")
+    self.session = requests.AsyncSession(
+      max_clients=4,
+      impersonate="chrome",
+    )
 
-  def get(
+  async def __aenter__(self) -> "HttpClient":
+    return self
+
+  async def __aexit__(self, exc_type, exc_value, traceback) -> None:
+    await self.close()
+
+  async def close(self) -> None:
+    """Close the underlying asynchronous session."""
+    await self.session.close()
+
+  async def get(
     self,
     url: str,
     headers: dict[str, str],
@@ -38,7 +51,7 @@ class HttpClient:
       logger.info("[HTTP GET] Initiating request to %s%s%s", url, param_str, attempt_str)
       start_time = time.time()
       try:
-        response = self.session.get(url, headers=headers, params=params, timeout=30)
+        response = await self.session.get(url, headers=headers, params=params, timeout=30)
         elapsed = time.time() - start_time
         logger.info("[HTTP %s] Completed in %.2fs from %s", response.status_code, elapsed, url)
         if response.status_code == 200:
@@ -61,9 +74,6 @@ class HttpClient:
       if attempt < tries - 1:
         sleep_seconds = 1.2 * (attempt + 1)
         logger.info("Retrying in %.1fs...", sleep_seconds)
-        time.sleep(sleep_seconds)
+        await asyncio.sleep(sleep_seconds)
     logger.error("[HTTP FAILED] Exhausted %d attempts for %s", tries, url)
     return None
-
-
-http_client = HttpClient()
