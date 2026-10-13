@@ -61,7 +61,7 @@ class BenchmarkService:
       if not raw_rate or raw_rate <= 0:
         continue
       records.append(
-        (self.source, item["date"], quote, home_code, round(1.0 / raw_rate, 6), item)
+        (self.source, item["date"], quote, home_code, 1.0 / raw_rate, item)
       )
     if records:
       self.db.set_benchmarks(records)
