@@ -2,6 +2,7 @@
 
 DB_PATH = "fx_db.sqlite"
 DATE_FMT = "%Y-%m-%d"
+MAX_CONNECTIONS_PER_HOST = 4
 
 # Currency list: ISO-4217 codes
 DEFAULT_CURRENCIES = [

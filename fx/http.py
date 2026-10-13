@@ -7,6 +7,9 @@ import time
 from typing import Any
 
 from curl_cffi import requests
+from curl_cffi.const import CurlMOpt
+
+from fx.config import MAX_CONNECTIONS_PER_HOST
 
 logger = logging.getLogger(__file__)
 
@@ -19,12 +22,19 @@ def to_float(value: Any) -> float | None:
     return None
 
 class HttpClient:
-  """Executes JSON GET requests with bounded retries."""
+  """Executes JSON GET requests with bounded retries and per-host limits."""
 
-  def __init__(self) -> None:
+  def __init__(self, max_connections_per_host: int = MAX_CONNECTIONS_PER_HOST) -> None:
+    if max_connections_per_host < 1:
+      raise ValueError("max_connections_per_host must be at least 1")
+    self.max_connections_per_host = max_connections_per_host
     self.session = requests.AsyncSession(
-      max_clients=4,
+      max_clients=10,
       impersonate="chrome",
+    )
+    self.session.acurl.setopt(
+      CurlMOpt.MAX_HOST_CONNECTIONS,
+      max_connections_per_host,
     )
 
   async def __aenter__(self) -> "HttpClient":
