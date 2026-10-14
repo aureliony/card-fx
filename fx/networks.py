@@ -173,7 +173,7 @@ class UnionPayProvider(NetworkProvider):
       base = item.get("baseCur", "")
       trans = item.get("transCur", "")
       item_rate = to_float(item.get("rateData"))
-      self.db.set("unionpay", date_string, base, trans, {"rate": item_rate})
+      self.db.set(self.network, date_string, base, trans, {"rate": item_rate})
       if rate is None and base.upper() == home.upper() and trans.upper() == spend.upper():
         rate = item_rate
     if rate is None:
