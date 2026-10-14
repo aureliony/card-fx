@@ -7,7 +7,6 @@ import time
 from typing import Any
 
 from curl_cffi import requests
-from curl_cffi.const import CurlMOpt
 
 from fx.config import MAX_CONNECTIONS_PER_HOST
 
@@ -27,14 +26,10 @@ class HttpClient:
   def __init__(self, max_connections_per_host: int = MAX_CONNECTIONS_PER_HOST) -> None:
     if max_connections_per_host < 1:
       raise ValueError("max_connections_per_host must be at least 1")
-    self.max_connections_per_host = max_connections_per_host
+    self.connection_semaphore = asyncio.Semaphore(max_connections_per_host)
     self.session = requests.AsyncSession(
       max_clients=10,
       impersonate="chrome",
-    )
-    self.session.acurl.setopt(
-      CurlMOpt.MAX_HOST_CONNECTIONS,
-      max_connections_per_host,
     )
 
   async def __aenter__(self) -> "HttpClient":
@@ -52,7 +47,7 @@ class HttpClient:
     url: str,
     headers: dict[str, str],
     params: dict[str, Any] | None = None,
-    tries: int = 4,
+    tries: int = 2,
   ) -> Any | None:
     """Perform a GET request and decode its JSON response."""
     param_str = f" with params={params}" if params else ""
@@ -61,7 +56,8 @@ class HttpClient:
       logger.info("[HTTP GET] Initiating request to %s%s%s", url, param_str, attempt_str)
       start_time = time.time()
       try:
-        response = await self.session.get(url, headers=headers, params=params, timeout=30)
+        async with self.connection_semaphore:
+          response = await self.session.get(url, headers=headers, params=params, timeout=30)
         elapsed = time.time() - start_time
         logger.info("[HTTP %s] Completed in %.2fs from %s", response.status_code, elapsed, url)
         if response.status_code == 200:
